@@ -1,0 +1,505 @@
+From 29e850e518b5a4160ef959af21d7167b57551b9e Mon Sep 17 00:00:00 2001
+From: "google-labs-jules[bot]"
+ <161369871+google-labs-jules[bot]@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 07:53:56 +0000
+Subject: [PATCH] Add Metalio E-Ink 4 board profile, CST816S touch driver, and
+ TCA9555 expander
+
+---
+ .../BoardConfig/include/BoardConfig.h         |  71 +++++++--
+ .../BoardConfig/include/MetalioBoard.h        | 137 ++++++++++++++++++
+ .../InputManager/include/InputManager.h       |   2 +
+ .../InputManager/src/Cst816sTouch.cpp         | 130 +++++++++++++++++
+ .../InputManager/src/InputManager.cpp         |   6 +
+ 5 files changed, 336 insertions(+), 10 deletions(-)
+ create mode 100644 libs/hardware/BoardConfig/include/MetalioBoard.h
+ create mode 100644 libs/hardware/InputManager/src/Cst816sTouch.cpp
+
+diff --git a/libs/hardware/BoardConfig/include/BoardConfig.h b/libs/hardware/BoardConfig/include/BoardConfig.h
+index e5a186a..e132b2c 100644
+--- a/libs/hardware/BoardConfig/include/BoardConfig.h
++++ b/libs/hardware/BoardConfig/include/BoardConfig.h
+@@ -80,15 +80,18 @@
+ #ifndef FREEINK_DEVICE_ONEPAGE
+ #define FREEINK_DEVICE_ONEPAGE 0
+ #endif
++#ifndef FREEINK_DEVICE_METALIO
++#define FREEINK_DEVICE_METALIO 0
++#endif
+
+ // --- 2) Coherence: exactly one MCU family, at least one device ---------------
+ #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC ||                \
+       FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||             \
+       FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 ||    \
+       FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 ||                \
+-      FREEINK_DEVICE_ONEPAGE)
++      FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_METALIO)
+ #error \
+-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, WAVESHARE_EPAPER_397, ONEPAGE) in your build env — see platformio.sample.ini."
++    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, WAVESHARE_EPAPER_397, ONEPAGE, METALIO) in your build env — see platformio.sample.ini."
+ #endif
+ // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
+ // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
+@@ -100,7 +103,7 @@
+   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
+    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+    FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 ||                         \
+-   FREEINK_DEVICE_WAVESHARE_EPAPER_397)
++   FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO)
+ #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
+ #if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
+ #error \
+@@ -116,7 +119,7 @@
+ // references — see docs/xteink-x4pro-support.md.
+ #if FREEINK_DEVICE_X4 || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
+     FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 ||   \
+-    FREEINK_DEVICE_ONEPAGE
++    FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_METALIO
+ #define FREEINK_DRIVER_SSD1677 1
+ #else
+ #define FREEINK_DRIVER_SSD1677 0
+@@ -200,7 +203,7 @@
+ #define FREEINK_CAP_TOUCH                                                                               \
+   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || \
+    FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || \
+-   FREEINK_DEVICE_EEGO_A4)
++   FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_METALIO)
+ #endif
+ #ifndef FREEINK_CAP_FRONTLIGHT
+ #define FREEINK_CAP_FRONTLIGHT                                                                        \
+@@ -286,7 +289,8 @@
+ #define FREEINK_CAP_RTC                                                                             \
+   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || \
+    FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_EEGO_A4 ||                   \
+-   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_LILYGO)
++   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_LILYGO ||      \
++   FREEINK_DEVICE_METALIO)
+ #endif
+ #ifndef FREEINK_CAP_TEMP_HUMIDITY
+ #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
+@@ -331,7 +335,7 @@
+ #ifndef FREEINK_SD_SDMMC
+ #define FREEINK_SD_SDMMC                                                                                     \
+   (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+-   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
++   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_METALIO)
+ #endif
+
+ // Serial log transport hint for consumer firmware. Boards can share the same MCU
+@@ -388,6 +392,7 @@ enum class Board : uint8_t {
+   EegoA4,             // EEGO Reader A4: ESP32-S3, UC8279C 768x552 SPI panel, GSLX680 touch, PCF8563 RTC
+   WaveshareEpaper397,
+   OnePage,              // OnePage: ESP32-C61, SSD1677 800x480 SPI panel, 4-key ADC ladder + 3 side keys
++  MetalioEInk4,         // Metalio E-Ink 4: ESP32-S3, SSD1677 800x480, CST816S touch, TCA9555 expander
+ };
+
+ // How the board reports button presses.
+@@ -430,7 +435,8 @@ enum class TouchController : uint8_t {
+   Gt911,
+   Ft5x06,
+   Gslx680,
+-  Ft6336u
++  Ft6336u,
++  Cst816s
+ };
+
+ // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
+@@ -1749,6 +1755,42 @@ constexpr BoardProfile ONEPAGE = {
+ static_assert(ONEPAGE.displayWidth / 8 * ONEPAGE.displayHeight == 48000,
+               "OnePage framebuffer must be 48,000 bytes (800/8 x 480)");
+
++// --- Metalio E-Ink 4 — ESP32-S3 N16R8, SSD1677 + CST816S touch + TCA9555 IO expander ---
++constexpr BoardProfile METALIO_EINK_4 = {
++    Board::MetalioEInk4,
++    "metalio_eink_4",
++    InputStyle::DigitalButtons,
++    DisplayController::SSD1677,
++    800,
++    480,
++    // Display SPI: SCLK 12, MOSI 11, CS 13, DC 18, RST 14, BUSY 6
++    {12, 11, 13, 18, 14, 6, PIN_UNASSIGNED},
++    20000000,
++    // SD: 1-bit SDMMC CLK=41, CMD=42, D0=40, powerEnable=5 (active-low)
++    {41, 40, 42, 45, 5, true, 0, false},
++    // Buttons: BOOT=0, POWER=3
++    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 3, false},
++    PIN_UNASSIGNED,  // batteryAdc: CX25601N charger / I2C fuel gauge
++    21,              // batteryChargeStatus
++    2.0f,
++    PIN_UNASSIGNED,
++    // Touch: CST816S on SDA=39, SCL=38, IRQ=10, RESET=TCA9555 P1.1 (handled via expander)
++    // CST816S portrait native frame 480x800 -> mapped to landscape 800x480 -> swapXY=true
++    {TouchController::Cst816s, 39, 38, 10, PIN_UNASSIGNED, 0x15, 0, 799, 0, 479, false, 0, false, false, PIN_UNASSIGNED, true, false, true, false, false},
++    NO_FRONTLIGHT,
++    NO_AUDIO,
++    NO_LEDS,
++    NO_FLIP,
++    {41, 42, 40, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 1}, // SDMMC 1-bit
++    NO_GAUGE,
++    NO_MIC,
++    {39, 38, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None}, // PCF8563 RTC on I2C 0x51
++    1.2f,
++    {1}, // power.latch0 = GPIO1
++    0,
++    {9, 7, 3, 7},
++    true};
++
+ // Largest framebuffer (bytes) over the devices compiled into this build, derived
+ // from the profiles above. The display facade sizes its static framebuffer to
+ // this so one binary holds whichever panel is runtime-selected; a single-device
+@@ -1773,12 +1815,15 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
+                         FREEINK_DEVICE_MURPHY_M4 ? panelBytes(MURPHY_M4) : 0u)),
+               cmax(cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
+                         FREEINK_DEVICE_WAVESHARE_EPAPER_397 ? panelBytes(WAVESHARE_EPAPER_397) : 0u),
+-                   FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u))));
++                   cmax(FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u,
++                        FREEINK_DEVICE_METALIO ? panelBytes(METALIO_EINK_4) : 0u)))));
+
+ // Compile-time default device — the profile ACTIVE starts as. With a single
+ // device in the build this is the only device; with several same-MCU devices it
+ // is the boot default until the consumer calls selectDevice().
+-#if FREEINK_DEVICE_ONEPAGE
++#if FREEINK_DEVICE_METALIO
++constexpr BoardProfile DEFAULT_DEVICE = METALIO_EINK_4;
++#elif FREEINK_DEVICE_ONEPAGE
+ constexpr BoardProfile DEFAULT_DEVICE = ONEPAGE;
+ #elif FREEINK_DEVICE_PAPERMONO
+ constexpr BoardProfile DEFAULT_DEVICE = PAPER_MONO;
+@@ -1907,6 +1952,11 @@ inline bool selectDevice(Board which) {
+     case Board::OnePage:
+       ACTIVE = ONEPAGE;
+       break;
++#endif
++#if FREEINK_DEVICE_METALIO
++    case Board::MetalioEInk4:
++      ACTIVE = METALIO_EINK_4;
++      break;
+ #endif
+     default:
+       return false;
+@@ -1932,6 +1982,7 @@ inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
+ inline bool isMurphyM4() { return ACTIVE.board == Board::MurphyM4; }
+ inline bool isWaveshareEpaper397() { return ACTIVE.board == Board::WaveshareEpaper397; }
+ inline bool isOnePage() { return ACTIVE.board == Board::OnePage; }
++inline bool isMetalioEInk4() { return ACTIVE.board == Board::MetalioEInk4; }
+ inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
+ inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
+ inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }
+diff --git a/libs/hardware/BoardConfig/include/MetalioBoard.h b/libs/hardware/BoardConfig/include/MetalioBoard.h
+new file mode 100644
+index 0000000..6d79d14
+--- /dev/null
++++ b/libs/hardware/BoardConfig/include/MetalioBoard.h
+@@ -0,0 +1,137 @@
++#pragma once
++
++#include <Arduino.h>
++#include <Wire.h>
++
++// TCA9555 / TCA95XX 16-bit I2C IO Expander for Metalio E-Ink 4 board.
++// I2C Address: 0x20
++//
++// Pin assignments on Metalio E-Ink 4:
++//   P0.7 (Pin 7): VOL- Button (Input)
++//   P1.0 (Pin 8): VOL+ Button (Input)
++//   P1.1 (Pin 9): TP_RST / Touch Reset (Output)
++//   P1.2 (Pin 10): SCREEN_SOCKET_PWR (Output)
++//   P1.3 (Pin 11): PWR_KEY_PULSE (Output)
++//   P1.4 (Pin 12): ACCEL_INT (Input)
++//   P1.5 (Pin 13): PA_SWITCH (Output)
++//   P1.6 (Pin 14): PA / Audio Amp Power (Output)
++//   P1.7 (Pin 15): MAIN_PWR / System Power (Output)
++
++namespace metalio {
++
++class Tca9555 {
++ public:
++  static constexpr uint8_t I2C_ADDR = 0x20;
++
++  // Register Map
++  static constexpr uint8_t REG_INPUT_PORT0 = 0x00;
++  static constexpr uint8_t REG_INPUT_PORT1 = 0x01;
++  static constexpr uint8_t REG_OUTPUT_PORT0 = 0x02;
++  static constexpr uint8_t REG_OUTPUT_PORT1 = 0x03;
++  static constexpr uint8_t REG_POLARITY_PORT0 = 0x04;
++  static constexpr uint8_t REG_POLARITY_PORT1 = 0x05;
++  static constexpr uint8_t REG_CONFIG_PORT0 = 0x06;
++  static constexpr uint8_t REG_CONFIG_PORT1 = 0x07;
++
++  // IO Expander Pins
++  enum Pin : uint8_t {
++    VOL_DOWN = 7,         // P0.7
++    VOL_UP = 8,           // P1.0
++    TP_RST = 9,           // P1.1
++    SCREEN_SOCKET_PWR = 10,// P1.2
++    PWR_KEY_PULSE = 11,   // P1.3
++    ACCEL_INT = 12,       // P1.4
++    PA_SWITCH = 13,       // P1.5
++    PA = 14,              // P1.6
++    MAIN_PWR = 15,        // P1.7
++    USB_MUX_SEL = 15      // Alias for main/USB power selection
++  };
++
++  static bool begin(int sda = 41, int scl = 42, uint32_t frequency = 400000) {
++    Wire.begin(sda, scl, frequency);
++
++    // Set Pin Directions (0 = Output, 1 = Input)
++    // Port 0: P0.7 input (0x80), P0.0-P0.6 outputs (0x00) -> 0x80
++    // Port 1: P1.0 input, P1.4 input -> 0x11
++    uint8_t cfg0 = 0x80;
++    uint8_t cfg1 = 0x11;
++
++    if (!writeReg(REG_CONFIG_PORT0, cfg0) || !writeReg(REG_CONFIG_PORT1, cfg1)) {
++      return false;
++    }
++
++    // Default Output Levels
++    // MAIN_PWR (P1.7) = HIGH, SCREEN_SOCKET_PWR (P1.2) = HIGH, PWR_KEY_PULSE (P1.3) = HIGH
++    // PA (P1.6) = LOW, PA_SWITCH (P1.5) = LOW, TP_RST (P1.1) = HIGH
++    uint8_t out1 = (1 << (MAIN_PWR - 8)) | (1 << (SCREEN_SOCKET_PWR - 8)) |
++                   (1 << (PWR_KEY_PULSE - 8)) | (1 << (TP_RST - 8));
++    writeReg(REG_OUTPUT_PORT1, out1);
++
++    return true;
++  }
++
++  static bool setPin(Pin pin, bool level) {
++    uint8_t reg = (pin < 8) ? REG_OUTPUT_PORT0 : REG_OUTPUT_PORT1;
++    uint8_t bit = pin % 8;
++    uint8_t val = 0;
++    if (!readReg(reg, val)) return false;
++    if (level) val |= (1 << bit);
++    else val &= ~(1 << bit);
++    return writeReg(reg, val);
++  }
++
++  static uint16_t readInputs() {
++    uint8_t p0 = 0, p1 = 0;
++    readReg(REG_INPUT_PORT0, p0);
++    readReg(REG_INPUT_PORT1, p1);
++    return (static_cast<uint16_t>(p1) << 8) | p0;
++  }
++
++  static bool isVolDownPressed() {
++    uint8_t p0 = 0;
++    if (readReg(REG_INPUT_PORT0, p0)) {
++      return (p0 & 0x80) == 0; // Active-low
++    }
++    return false;
++  }
++
++  static bool isVolUpPressed() {
++    uint8_t p1 = 0;
++    if (readReg(REG_INPUT_PORT1, p1)) {
++      return (p1 & 0x01) == 0; // Active-low
++    }
++    return false;
++  }
++
++ private:
++  static bool writeReg(uint8_t reg, uint8_t val) {
++    Wire.beginTransmission(I2C_ADDR);
++    Wire.write(reg);
++    Wire.write(val);
++    return Wire.endTransmission() == 0;
++  }
++
++  static bool readReg(uint8_t reg, uint8_t& val) {
++    Wire.beginTransmission(I2C_ADDR);
++    Wire.write(reg);
++    if (Wire.endTransmission(false) != 0) return false;
++    if (Wire.requestFrom(I2C_ADDR, (uint8_t)1) == 1) {
++      val = Wire.read();
++      return true;
++    }
++    return false;
++  }
++};
++
++inline uint8_t metalioButtonHook() {
++  uint8_t mask = 0;
++  if (Tca9555::isVolDownPressed()) {
++    mask |= (1 << 5); // BTN_DOWN
++  }
++  if (Tca9555::isVolUpPressed()) {
++    mask |= (1 << 4); // BTN_UP
++  }
++  return mask;
++}
++
++}  // namespace metalio
+diff --git a/libs/hardware/InputManager/include/InputManager.h b/libs/hardware/InputManager/include/InputManager.h
+index 550f4ba..2a46f3e 100644
+--- a/libs/hardware/InputManager/include/InputManager.h
++++ b/libs/hardware/InputManager/include/InputManager.h
+@@ -345,6 +345,8 @@ class InputManager {
+   bool readChsc6xPoint(TouchPoint& point);
+   bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
+   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
++  void beginCst816s();
++  void pollCst816s(unsigned long now);
+ #if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4
+   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
+   void updateTouchContact(const TouchPoint& point);
+diff --git a/libs/hardware/InputManager/src/Cst816sTouch.cpp b/libs/hardware/InputManager/src/Cst816sTouch.cpp
+new file mode 100644
+index 0000000..8c65386
+--- /dev/null
++++ b/libs/hardware/InputManager/src/Cst816sTouch.cpp
+@@ -0,0 +1,130 @@
++#include "InputManager.h"
++
++// Note: CST816S touch driver implementation for InputManager.
++// CST816S is an I2C capacitive touch controller operating at 7-bit address 0x15.
++// Registers:
++// 0x02: Finger Num / Touch Count
++// 0x03: Touch 0 X High [3:0], Event Flag [7:6]
++// 0x04: Touch 0 X Low [7:0]
++// 0x05: Touch 0 Y High [3:0], Touch ID [7:4]
++// 0x06: Touch 0 Y Low [7:0]
++// Native coordinates reported by CST816S on Metalio E-Ink 4: 480 x 800 (portrait).
++
++#if FREEINK_CAP_TOUCH
++#include <Wire.h>
++
++void InputManager::beginCst816s() {
++  const auto& t = BoardConfig::ACTIVE.touch;
++  if (t.powerEnable >= 0) {
++    gpio_hold_dis(static_cast<gpio_num_t>(t.powerEnable));
++    pinMode(t.powerEnable, OUTPUT);
++    digitalWrite(t.powerEnable, t.powerEnableActiveHigh ? HIGH : LOW);
++    delay(50);
++  }
++
++  if (t.reset >= 0) {
++    pinMode(t.reset, OUTPUT);
++    digitalWrite(t.reset, LOW);
++    delay(20);
++    digitalWrite(t.reset, HIGH);
++    delay(50);
++  }
++
++  if (t.sda >= 0 && t.scl >= 0) {
++    Wire.begin(t.sda, t.scl, 400000);
++    Wire.setTimeOut(10);
++  }
++
++  if (t.irq >= 0) {
++    pinMode(t.irq, INPUT_PULLUP);
++  }
++
++  // Probe CST816S I2C address (default 0x15)
++  const uint8_t addr = t.i2cAddress ? t.i2cAddress : 0x15;
++  Wire.beginTransmission(addr);
++  if (Wire.endTransmission() == 0) {
++    touchDataEnabled = true;
++  } else {
++    touchDataEnabled = false;
++  }
++}
++
++void InputManager::pollCst816s(const unsigned long now) {
++  const auto& t = BoardConfig::ACTIVE.touch;
++  if (now < touchReadAt) return;
++  touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
++
++  const uint8_t addr = t.i2cAddress ? t.i2cAddress : 0x15;
++
++  // Read 6 bytes starting at register 0x02
++  Wire.beginTransmission(addr);
++  Wire.write(0x02);
++  if (Wire.endTransmission(false) != 0) {
++    if (touchPressed && now - touchPoint.timestamp > 100) {
++      touchPressed = false;
++      touchPoint.valid = false;
++      touchReleasedEvent = true;
++      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
++    }
++    return;
++  }
++
++  uint8_t buf[5] = {0};
++  if (Wire.requestFrom(addr, (uint8_t)5, (uint8_t)true) != 5) {
++    while (Wire.available()) Wire.read();
++    if (touchPressed && now - touchPoint.timestamp > 100) {
++      touchPressed = false;
++      touchPoint.valid = false;
++      touchReleasedEvent = true;
++      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
++    }
++    return;
++  }
++
++  for (uint8_t i = 0; i < 5; i++) buf[i] = Wire.read();
++
++  uint8_t touchCount = buf[0] & 0x0F;
++  if (touchCount == 0) {
++    if (touchPressed) {
++      touchPressed = false;
++      touchPoint.valid = false;
++      touchReleasedEvent = true;
++      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
++    }
++    return;
++  }
++
++  uint16_t rawX = ((static_cast<uint16_t>(buf[1]) & 0x0F) << 8) | buf[2];
++  uint16_t rawY = ((static_cast<uint16_t>(buf[3]) & 0x0F) << 8) | buf[4];
++
++  // Apply axis swapping, scaling, and flipping
++  const uint16_t sx = t.swapXY ? rawY : rawX;
++  const uint16_t sy = t.swapXY ? rawX : rawY;
++
++  touchPoint.valid = true;
++  touchPoint.x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, t.rawMaxX - t.rawMinX);
++  touchPoint.y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, t.rawMaxY - t.rawMinY);
++  if (t.flipX) touchPoint.x = static_cast<uint16_t>((t.rawMaxX - t.rawMinX) - touchPoint.x);
++  if (t.flipY) touchPoint.y = static_cast<uint16_t>((t.rawMaxY - t.rawMinY) - touchPoint.y);
++  touchPoint.timestamp = now;
++
++  if (!touchPressed) {
++    touchPressed = true;
++    touchPressedEvent = true;
++    touchDownPoint = touchPoint;
++    touchUpPoint = touchPoint;
++    touchMovedBeyondTapSlop = false;
++    touchMovedBeyondTapReleaseSlop = false;
++  } else {
++    touchUpPoint = touchPoint;
++    const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
++    const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
++    if (absInt(dx) > TOUCH_TAP_SLOP_PX || absInt(dy) > TOUCH_TAP_SLOP_PX) {
++      touchMovedBeyondTapSlop = true;
++    }
++    if (absInt(dx) > TOUCH_TAP_RELEASE_SLOP_PX || absInt(dy) > TOUCH_TAP_RELEASE_SLOP_PX) {
++      touchMovedBeyondTapReleaseSlop = true;
++    }
++  }
++}
++#endif
+diff --git a/libs/hardware/InputManager/src/InputManager.cpp b/libs/hardware/InputManager/src/InputManager.cpp
+index 70f46fe..b492c85 100644
+--- a/libs/hardware/InputManager/src/InputManager.cpp
++++ b/libs/hardware/InputManager/src/InputManager.cpp
+@@ -1325,6 +1325,10 @@ void InputManager::beginTouch() {
+     beginFt5x06();
+     return;
+   }
++  if (t.controller == BoardConfig::TouchController::Cst816s) {
++    beginCst816s();
++    return;
++  }
+   // CHSC6x: I2C bus only. The IRQ is left unconfigured — it's a brief pulse on
+   // this controller, so detection polls I2C and gates on the frame's touch bit
+   // instead (see decodeChsc6xFrame / updateTouchFromIrq).
+@@ -1369,6 +1373,8 @@ uint8_t InputManager::serviceTouch() {
+       pollGt911(now);
+     } else if (t.controller == BoardConfig::TouchController::Ft5x06) {
+       pollFt5x06(now);
++    } else if (t.controller == BoardConfig::TouchController::Cst816s) {
++      pollCst816s(now);
+     } else {
+       updateTouchFromIrq(now, 0);  // detection polls I2C; the IRQ is unused now
+       // Synthesized confirm tracks an actually-detected press, not the IRQ line.
+--
+2.53.0
