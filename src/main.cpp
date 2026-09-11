@@ -24,6 +24,9 @@
 #if FREEINK_DEVICE_X4PRO
 #include <XteinkDetect.h>
 #endif
+#if FREEINK_DEVICE_METALIO
+#include <MetalioBoard.h>
+#endif
 #include <builtinFonts/all.h>
 
 #include <cstring>
@@ -493,6 +496,10 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 
 void setup() {
   BoardConfig::holdPowerRails();
+#if FREEINK_DEVICE_METALIO
+  metalio::Tca9555::begin(39, 38);
+  InputManager::setButtonHook(metalio::metalioButtonHook);
+#endif
 
 #ifdef ENABLE_SERIAL_LOG
 #ifdef CROSSPOINT_WAIT_FOR_USB_SERIAL

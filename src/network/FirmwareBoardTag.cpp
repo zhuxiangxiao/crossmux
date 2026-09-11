@@ -34,6 +34,8 @@
 #define CROSSPOINT_BOARD_NAME "waveshare_epaper_397"
 #elif FREEINK_DEVICE_DELINK
 #define CROSSPOINT_BOARD_NAME "delink"
+#elif FREEINK_DEVICE_METALIO
+#define CROSSPOINT_BOARD_NAME "metalio"
 #elif CROSSPOINT_EMULATED
 #define CROSSPOINT_BOARD_NAME "simulator"
 #else
