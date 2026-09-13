@@ -43,6 +43,21 @@ reMarkable 版与 CrossMux 均采用微信读书 Web 端 HTTPS 接口。下表�
 | **网络 User-Agent** | `User-Agent` Header | `WeRead/1.0.0 WRBrand/remarkable wr_eink` | `CrossPoint-ESP32-<VERSION>` | **推荐改用官方墨水屏设备 UA** |
 | **在线字体 CDN** | `https://weread-1258476243.file.myqcloud.com/` | 从腾讯云 CDN 下载思源宋体、仓耳今楷等字体 | 仅支持本地 `.cpfont` 字体 | **新增在线字体下载与转换功能** |
 
+### 3.1 C++ 核心 API 客户端符号方法比对 (`WereadApiClient` vs `WeReadClient`)
+
+通过对 reMarkable 二进制程序 `remarkable-weread` 的 C++ 符号逆向分析，其 API 客户端核心类为 `WereadApiClient`：
+
+| 功能模块 | reMarkable C++ 符号方法 (`WereadApiClient`) | CrossMux C++ 方法 (`WeReadClient` / `WeReadProtocol`) | 详细行为对比 |
+|---|---|---|---|
+| **请求登录 UID** | `requestLoginUid()` | `fetchLoginUid()` | 均调用 `GET /web/getuid`。获取 UID 后生成扫码确认 URL (`https://weread.qq.com/web/confirm?pf=2&uid=...`)。 |
+| **轮询登录状态** | `pollLoginInfo(vid)` | `pollLogin()` | 均轮询 `GET /web/getlogininfo`。reMarkable 版保存 `wr_vid, wr_skey, wr_ql, wr_rt`；CrossMux 保存 `wr_vid, wr_skey, wr_rt` 至 SD 卡 `session.bin`。 |
+| **会话校验与刷新**| `validateSession()` / `renewSession()` | `renewSession()` | reMarkable 应用启动时主动触发 `validateSession` 校验 Cookie 有效性，失效时自动 `renewSession`。 |
+| **全量/增量书架** | `syncShelf(synckey)` | `syncShelfOnce()` | 调用 `GET /shelf/sync`，携带 `synckey` 游标。返回 `books` 数组及最新 `synckey`。 |
+| **书架 ID 列表同步**| `syncShelfIds()` | *(直接全量/按页拉取)* | reMarkable 增设 `syncShelfIds` 同步所有在线 `bookId` 集合，对照本地 SQLite 补全缺失书籍。 |
+| **章节与批量下载**| `downloadChapter(bookId, chapterUid, ...)` | `fetchReaderOnce()` / `fetchShardOnce()` | reMarkable 支持多章节分包压缩下载（存入 SQLite `chapter_download_batches`）；CrossMux 逐章拉取 Base64/XHTML，流式解密打成 SD 卡无密 `.epub` 文件。 |
+| **图片/资源拉取** | `downloadReaderImage(url)` | `downloadNextImage()` | reMarkable 拉取原始图片并在 QML 中渲染；CrossMux 提取图片并转为 112×164 BMP 缩略图以适应 ESP32 内存。 |
+| **阅读进度与时长**| `fetchProgress(bookId)` / `reportRead(...)` | `fetchProgressOnce()` / `sendProgressOnce()` | reMarkable 包含 5 个参数：`chapterUid, chapterIdx, chapterOffset, readingTime, progress`；CrossMux 在退出阅读或手动同步时上报。 |
+
 ---
 
 ## 4. 架构设计与流程图 (Mermaid Diagrams)
