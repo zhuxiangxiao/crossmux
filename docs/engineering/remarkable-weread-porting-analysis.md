@@ -129,6 +129,183 @@ graph TD
 
 ---
 
-## 6. 总结 (Conclusion)
+## 6. 微信读书 Web API 完整接口解析列表 (Complete WeRead Web API Reference)
+
+基于对 reMarkable 二进制应用 (`remarkable-weread`) 逆向工程与 CrossMux 抓包分析，整理出微信读书墨水屏 / Web 端使用的完整 API 接口文档：
+
+### 6.1 身份认证与登录接口 (Authentication)
+
+#### 1. 获取登录二维码与临时 UID (`GET /web/getuid`)
+* **Endpoint**: `https://weread.qq.com/web/getuid`
+* **Method**: `GET`
+* **Headers**:
+  * `User-Agent`: `WeRead/1.0.0 WRBrand/remarkable wr_eink`
+* **Response Payload (JSON)**:
+  ```json
+  {
+    "uid": "12345678",
+    "token": "tmp_token_xyz"
+  }
+  ```
+* **客户端处理**: 拿到 `uid` 后生成二维码供微信扫码：`https://weread.qq.com/web/confirm?pf=2&uid=<uid>`。
+
+#### 2. 轮询扫码状态与换取 Session (`GET /web/getlogininfo`)
+* **Endpoint**: `https://weread.qq.com/web/getlogininfo`
+* **Method**: `GET`
+* **Query Parameters**:
+  * `uid`: 阶段 1 获取的临时 UID
+* **Response Headers (Set-Cookie)**:
+  * `wr_vid`: 用户微信读书 VID (例如 `12345678`)
+  * `wr_skey`: 会话 Key (例如 `AbCdEf12`)
+  * `wr_rt`: Refresh Token
+  * `wr_name`, `wr_avatar`: 账号昵称与头像 URL
+* **Response Payload (JSON)**:
+  ```json
+  {
+    "succeed": 1,
+    "vid": 12345678
+  }
+  ```
+
+#### 3. 会话校验与 Refresh (`GET /web/renewSession`)
+* **Endpoint**: `https://weread.qq.com/web/renewSession`
+* **Method**: `GET`
+* **Cookies**: `wr_vid`, `wr_skey`, `wr_rt`
+* **作用**: 当服务端返回 Session Expired 错误时，客户端携带 `wr_rt` 自动刷新 `wr_skey` Cookie，无需重复扫码。
+
+---
+
+### 6.2 书架与书籍元数据接口 (Bookshelf & Metadata)
+
+#### 4. 全量/增量书架同步 (`GET /shelf/sync`)
+* **Endpoint**: `https://weread.qq.com/shelf/sync`
+* **Method**: `GET`
+* **Query Parameters**:
+  * `synckey`: 当前本地最高同步 Key (首次传 `0`)
+* **Cookies**: `wr_vid`, `wr_skey`
+* **Response Payload (JSON)**:
+  ```json
+  {
+    "synckey": 1700000000,
+    "books": [
+      {
+        "bookId": "832208",
+        "title": "三体",
+        "author": "刘慈欣",
+        "cover": "https://weread-1258476243.file.myqcloud.com/...",
+        "version": 1,
+        "format": "epub",
+        "totalWords": 300000
+      }
+    ]
+  }
+  ```
+
+#### 5. 书籍批量详情同步 (`GET /shelf/syncbook`)
+* **Endpoint**: `https://weread.qq.com/shelf/syncbook`
+* **Method**: `GET`
+* **Query Parameters**:
+  * `bookIds`: 逗号分隔或 JSON 数组字符串 (`["832208", "123456"]`)
+* **Cookies**: `wr_vid`, `wr_skey`
+* **作用**: 用于离线书架补齐、获取高清封面 URL、书籍付费类型 (`payType`)、最大免费章节 (`maxFreeChapter`) 及完结状态 (`finished`)。
+
+---
+
+### 6.3 章节与正文拉取接口 (Chapter & Content)
+
+#### 6. 拉取章节目录 (`GET /book/chapterInfos`)
+* **Endpoint**: `https://weread.qq.com/book/chapterInfos`
+* **Method**: `GET` / `POST`
+* **Query Parameters / Payload**:
+  * `bookId`: 书籍 ID
+* **Cookies**: `wr_vid`, `wr_skey`
+* **Response Payload (JSON)**:
+  ```json
+  {
+    "data": [
+      {
+        "chapterUid": 1,
+        "chapterIdx": 1,
+        "title": "第一章 科学边界",
+        "wordCount": 5000,
+        "paid": 0
+      }
+    ]
+  }
+  ```
+
+#### 7. 章节正文下载 (`GET /book/chapterdownload` 或 `/book/read`)
+* **Endpoint**: `https://weread.qq.com/book/chapterdownload`
+* **Method**: `GET`
+* **Query Parameters**:
+  * `bookId`: 书籍 ID
+  * `chapterUid`: 目标章节 UID
+* **Cookies**: `wr_vid`, `wr_skey`
+* **Response Format**:
+  * 可返回密文 Base64 数据流（客户端根据 `swapPositions` 算法解码），或标准带有 `<div data-weread-original-tag="body">` 标记的 XHTML 网页片段。
+
+---
+
+### 6.4 阅读进度与时长同步接口 (Progress & Reading Time)
+
+#### 8. 获取云端阅读进度 (`GET /book/getProgress`)
+* **Endpoint**: `https://weread.qq.com/book/getProgress`
+* **Method**: `GET`
+* **Query Parameters**: `bookId`
+* **Response Payload (JSON)**:
+  ```json
+  {
+    "bookId": "832208",
+    "chapterUid": 5,
+    "chapterOffset": 120,
+    "progress": 35,
+    "updateTime": 1700001234,
+    "appId": "wr_eink"
+  }
+  ```
+
+#### 9. 上报阅读进度与时长 (`POST /book/getProgress` 或 `/book/reportRead`)
+* **Endpoint**: `https://weread.qq.com/book/getProgress`
+* **Method**: `POST`
+* **Payload (JSON)**:
+  ```json
+  {
+    "bookId": "832208",
+    "chapterUid": 5,
+    "chapterIdx": 5,
+    "chapterOffset": 120,
+    "readingTime": 300,
+    "progress": 35,
+    "appId": "wr_eink"
+  }
+  ```
+
+---
+
+### 6.5 划线与热门书评接口 (Highlights & Reviews)
+
+#### 10. 拉取热门划线与书评 (`GET /web/book/bookmarklist` / `/web/review/list`)
+* **Endpoint**: `https://weread.qq.com/web/book/bookmarklist`
+* **Method**: `GET`
+* **Query Parameters**: `bookId`
+* **Cookies**: `wr_vid`, `wr_skey`
+* **作用**: 返回全网热门划线、个人划线及前 50 条热门书评。
+
+---
+
+### 6.6 字体与图片 CDN 接口 (CDN Storage)
+
+#### 11. 在线动态字体拉取
+* **Base URL**: `https://weread-1258476243.file.myqcloud.com/resources/fonts/`
+* **资源列表**:
+  * `NotoSansCJKsc-Regular.otf` (思源黑体)
+  * `SourceHanSerifSC-Regular.otf` (思源宋体)
+  * `CangErJinKai.ttf` (仓耳今楷)
+  * `CangErYunHei.ttf` (仓耳云黑)
+  * `CangErXuanSan.ttf` (仓耳玄三)
+
+---
+
+## 7. 总结 (Conclusion)
 
 reMarkable 微信读书应用为我们提供了官方墨水屏客户端在 API 调用、请求头伪装以及在线字体 CDN 分发方面的宝贵经验。虽然由于操作系统与硬件架构的差异无法直接运行其 Linux 二进制，但 CrossMux 能够以**协议升级 + C++ 原生重构**的方式，将 reMarkable 版的优秀特性（尤其是官方 User-Agent 和在线 CDN 字体）完美融合到 ESP32 固件中。
