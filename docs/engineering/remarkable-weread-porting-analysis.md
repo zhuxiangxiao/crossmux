@@ -234,15 +234,48 @@ graph TD
   }
   ```
 
-#### 7. 章节正文下载 (`GET /book/chapterdownload` 或 `/book/read`)
+#### 7. 章节正文下载与可逆置换解密 (`GET /book/chapterdownload` 或 `/book/read`)
 * **Endpoint**: `https://weread.qq.com/book/chapterdownload`
 * **Method**: `GET`
 * **Query Parameters**:
   * `bookId`: 书籍 ID
   * `chapterUid`: 目标章节 UID
 * **Cookies**: `wr_vid`, `wr_skey`
-* **Response Format**:
-  * 可返回密文 Base64 数据流（客户端根据 `swapPositions` 算法解码），或标准带有 `<div data-weread-original-tag="body">` 标记的 XHTML 网页片段。
+* **核心加解密算法（Reversible Character Shuffle Algorithm）说明**:
+  微信读书章节正文返回的是通过 Base64-URL 编码且字符位置被洗牌乱序的数据流。客户端解码与解密算法步骤如下：
+  1. **提取尾部校验字节 (Tail Extraction)**:
+     计算 `expectedTail = min(4, ceil((encodedLength + 9) / 10))`。从密文末尾提取 `expectedTail` 字节。
+  2. **构造位置置换数组 (Swap Array Generation)**:
+     遍历尾部字节，对每个字节的 bit 执行 `transformed += (bit & 1) << (2 * bit)` 位变换，将得到的数值按十进制字符串拼接。取模 `modulus = encodedLength - expectedTail - 2`，两两组对生成最多 10 组位置交换索引对 `(swap_pos_1, swap_pos_2)`。
+  3. **还原字符位置 (Character Unshuffle)**:
+     按照生成的交换对逆向交换密文中的字符位置，恢复原始 Base64 顺序。
+  4. **Base64-URL 解码**:
+     使用标准 Base64-URL (`-` 替换 `+`, `_` 替换 `/`) 解码，得到解密后的原始 XHTML / HTML 章节正文。
+
+### 6.4 请求签名与哈希算法 (Request Signing & Hash Algorithms)
+
+#### 8. 查询参数签名算法 (`signQuery`)
+微信读书部分客户端 API 请求需要对 Query String 进行自定义哈希签名（`signQuery`），算法逻辑如下：
+```cpp
+// 对 query 字符串进行双指针位异或签名计算
+uint64_t a = 0x15051505;
+uint64_t b = a;
+size_t i = strlen(query);
+while (i > 1) {
+  uint8_t current = query[i - 1];
+  uint8_t previous = query[i - 2];
+  a = (a ^ ((uint64_t)current << ((length - i + 1) % 30))) & 0x7fffffff;
+  b = (b ^ ((uint64_t)previous << ((i - 1) % 30))) & 0x7fffffff;
+  i -= 2;
+}
+snprintf(out, outSize, "%llx", a + b); // 返回十六进制签名串
+```
+
+#### 9. 书籍与章节 ID 哈希签名算法 (`encodeId`)
+微信读书使用由 3 轮 MD5 拼接构成的 ID 混淆映射算法（用于 URL 和客户端数据校验）：
+1. 计算输入字符串的 MD5 哈希 `md5_1`；
+2. 提取 `md5_1` 的前 3 个字符作为前缀，结合 MD5 生成规则计算中间散列 `md5_2`；
+3. 取 `md5_2` 的前 20 个字符，结合第三轮 MD5 计算最终的唯一标识映射。
 
 ---
 
