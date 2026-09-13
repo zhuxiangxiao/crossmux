@@ -1,0 +1,119 @@
+# reMarkable 微信读书应用 (remarkable-weread) 分析与 CrossMux 移植可行性报告
+
+## 1. 概述 (Executive Summary)
+
+微信读书为 reMarkable Linux 墨水屏设备推出了官方原生应用包（`remarkable-weread-v1.0.0-universal-release.zip`）。本报告针对该 64 位 AArch64 Linux 应用程序（基于 Qt 6 / QML）进行了深入逆向与协议分析，并与 CrossMux (ESP32 / FreeRTOS / FreeInk SDK) 现有的 C++ 微信读书模块进行了全方位对比。
+
+### 核心结论
+1. **直接运行/二进制移植可行性**：**不可行**。`remarkable-weread` 为 Linux 64 位 AArch64 ELF 动态链接可执行程序，依托 Linux 内核、Qt 6 运行时（QQmlApplicationEngine, QNetworkAccessManager）、SQLite3 以及 reMarkable 专有的 Framebuffer 硬件驱动。ESP32 属于 32 位 Xtensa/RISC-V 架构单片机，运行 FreeRTOS 无 Linux 内核与 Qt 依赖，无法直接执行或加载该二进制。
+2. **协议与接口借鉴价值**：**极高**。reMarkable 版与 CrossMux 均使用微信读书的 **Web 端 API 协议**（非 Open SDK），双方在扫码登录流程、书架同步、章节获取等核心 API 上高度重合。reMarkable 版使用了更标准的 User-Agent 标识 (`WeRead/1.0.0 WRBrand/remarkable wr_eink`)，并包含在线 CDN 动态字体下载机制。
+3. **架构与功能移植路线**：**源码/功能级移植与重构**。CrossMux 可以借鉴 reMarkable 版的优势特性（如：微信 CDN 在线第三方字体下载、更优化的 User-Agent 伪装、更完善的书架同步机制），并将其原生重构成 CrossMux 现有的 C++ 模块 (`lib/WeReadWebApi` + `src/activities/apps/weread/`)。
+
+---
+
+## 2. 平台与架构对比 (Platform & Architecture Comparison)
+
+| 维度 | reMarkable WeRead (`remarkable-weread`) | CrossMux WeRead (`src/activities/apps/weread`) |
+|---|---|---|
+| **目标硬件** | reMarkable Paper Pro / Move (AArch64 ARMv8) | ESP32-C3 / ESP32-S3 (Xtensa / RISC-V) |
+| **操作系统** | reMarkable OS (Custom Linux 5.4+) | FreeRTOS / ESP-IDF / FreeInk SDK |
+| **内存/存储** | 2GB~4GB RAM / 16GB~64GB Flash | 400KB SRAM + 2MB~8MB PSRAM / 4MB~16MB Flash + SD卡 |
+| **图形与UI框架** | Qt 6.x (QML / QQmlApplicationEngine / QtQuick) | FreeInk SDK C++ Framebuffer / LVGL / CrossMux Canvas |
+| **网络引擎** | `QNetworkAccessManager` + OpenSSL / system trust store | FreeInk `SecureClient` (wolfSSL / mbedTLS) + ESP-HTTP |
+| **数据持久化** | SQLite 3 (`/home/root/.local/share/remarkable-weread/db.sqlite`) | SD卡 FAT32 (`/.crosspoint/weread/` 结构化文件 / 二进制 session) |
+| **字体支持** | 动态从 WeRead CDN 下载 `.otf` 字体到系统/应用字体库 | 静态内置 8/10/12pt 字体 + SD 卡 `.cpfont` 专用离线字体包 |
+| **阅读实现方式**| 运行内嵌 QML HTML 渲染器，在线/本地实时渲染 | 后台下载章节/图片，本地 C++ 打包为标准 `.epub`，由内置 Reader 离线阅读 |
+
+---
+
+## 3. 网络 API 与协议对比 (Network API & Protocol Diff)
+
+reMarkable 版与 CrossMux 均采用微信读书 Web 端 HTTPS 接口。下表列出两者在网络交互上的异同：
+
+| 接口分类 | Endpoint | reMarkable WeRead 实现 | CrossMux WeRead 实现 | 移植/改进建议 |
+|---|---|---|---|---|
+| **扫码登录** | `GET /web/getuid` | 获取登录 UID & 确认二维码 URL | `WeReadProtocol` 解析 JSON 获取 UID & QrUrl | 保持一致 |
+| **轮询登录** | `GET /web/getlogininfo` | 轮询登录状态并获取 `wr_vid`, `wr_skey` Cookie | 轮询 Cookie 并保存至 `session.bin` | 保持一致 |
+| **登录确认** | `GET /web/confirm` | 携带 `pf=2&uid=...` 确认设备绑定 | 相同 | 保持一致 |
+| **书架同步** | `GET /shelf/sync` | 全量/增量同步书架列表，保存至 SQLite `shelf_entries` | 同步书架并更新 SD 卡 `shelf.json` | 增加增量 Synckey 校验 |
+| **书籍详情** | `GET /shelf/syncbook` 或 `/book/info` | 获取书籍元数据（标题、作者、封面图、更新时间） | 获取详情并缓存缩略图至 `cover.v2.bmp` | 保持一致 |
+| **章节目录** | `GET /book/chapterInfos` | 拉取全书章节目录及免费/付费标记 | 拉取章节目录并生成 SD 卡 `toc.bin` | 保持一致 |
+| **章节正文** | `GET /book/chapterdownload` / `/book/read` | 实时拉取章节内容并在 QML 视图中展示 | 拉取 Base64/XHTML 正文并解码转存 | 保持一致 |
+| **进度同步** | `GET/POST /book/getProgress` | 实时上传/拉取阅读进度 (`chapterUid`, `chapterOffset`) | 手动/退出阅读器时上报阅读时长与章节位置 | 保持一致 |
+| **网络 User-Agent** | `User-Agent` Header | `WeRead/1.0.0 WRBrand/remarkable wr_eink` | `CrossPoint-ESP32-<VERSION>` | **推荐改用官方墨水屏设备 UA** |
+| **在线字体 CDN** | `https://weread-1258476243.file.myqcloud.com/` | 从腾讯云 CDN 下载思源宋体、仓耳今楷等字体 | 仅支持本地 `.cpfont` 字体 | **新增在线字体下载与转换功能** |
+
+---
+
+## 4. 架构设计与流程图 (Mermaid Diagrams)
+
+### 4.1 reMarkable WeRead 整体架构 (Qt/Linux)
+
+```mermaid
+graph TD
+    A[Qt6 App / QML UI] -->|User Interaction| B[AppController / QML Context]
+    B -->|Network Requests| C[QNetworkAccessManager]
+    C -->|HTTPS / TLS| D[WeRead Server / CDN]
+    B -->|Data Persistence| E[SQLite3 db.sqlite]
+    B -->|Font Download| F[FontManager / System Font Dir]
+    F -->|Download .otf| D
+    B -->|E-Ink Framebuffer| G[reMarkable Epdc Display Drive]
+```
+
+### 4.2 CrossMux WeRead 现行架构 (ESP32/FreeRTOS)
+
+```mermaid
+graph TD
+    A[WeReadActivity / UI Step] -->|Operation Step| B[WeReadClient::Operation]
+    B -->|Protocol & Encoding| C[WeReadProtocol & WeReadXhtmlCodec]
+    B -->|HTTP/TLS Stream| D[WeReadHttpClient / FreeInk SecureClient]
+    D -->|HTTPS| E[WeRead Server / CDN]
+    B -->|FileSystem I/O| F[SD Card /.crosspoint/weread/]
+    C -->|EPUB Packaging| G[SD Card /WeRead/*.epub]
+    G -->|Offline Reading| H[ReaderActivity / Built-in EPUB Reader]
+```
+
+### 4.3 建议移植增强后的 CrossMux 架构
+
+```mermaid
+graph TD
+    A[WeReadActivity UI] --> B[WeReadClient Engine]
+    B -->|Updated UA & Headers| C[WeReadHttpClient]
+    B -->|Font Download Task| D[FontDownloadService]
+    D -->|Fetch .otf/ttf| E[WeRead CDN]
+    D -->|Convert/Save| F[SD Card /fonts/*.cpfont]
+    B -->|EPUB Generator| G[SD Card /WeRead/*.epub]
+    F -->|Load Dynamic Font| H[ReaderActivity]
+```
+
+---
+
+## 5. 可移植功能与 CrossMux 实施路线图 (Actionable Roadmap)
+
+为了将 reMarkable 微信读书应用的优势特性融合到 CrossMux 中，建议按以下 3 个阶段进行实施：
+
+### 阶段 1：协议与网络层优化 (Protocol Modernization)
+1. **更新 User-Agent 与请求头**：
+   - 将 `WeReadHttpClient` 中的默认请求头更新为 reMarkable 版使用的专用墨水屏标识：
+     `User-Agent: WeRead/1.0.0 WRBrand/remarkable wr_eink`
+   - 这能有效降低 Web 端 API 针对标准浏览器或自定义 User-Agent 的风控与拦截风险。
+
+### 阶段 2：在线字体动态下载与管理 (Online Font Downloading)
+1. **接入微信读书官方 CDN 字体源**：
+   - reMarkable 包中使用的 CDN 域名为：`https://weread-1258476243.file.myqcloud.com/`
+   - 可在 CrossMux 的 **设置 -> 阅读器字体管理** 或 **微信读书设置** 中新增在线字体下载功能。
+2. **下载与 SD 卡缓存流**：
+   - ESP32 通过 `WeReadHttpClient` 分片下载思源宋体、仓耳今楷等字体文件（`.otf` 或 `.ttf`）。
+   - 将下载的字体流式保存至 SD 卡 `/fonts/` 目录，并调用 CrossMux 的 `.cpfont` 转换工具或直接利用 FreeInk 字体引擎加载。
+
+### 阶段 3：书架管理与 UI 增强 (Bookshelf & UI Enhancements)
+1. **优化书架同步与状态恢复**：
+   - 借鉴 reMarkable 版在离线与在线状态切换时的逻辑，完善 CrossMux 的书架按页增量缓存与错误重试。
+2. **状态提示与排版**：
+   - 借鉴 reMarkable 版在下载/字体下载时的状态面板 (StatusPanel) 提示设计，优化 CrossMux 在 E-ink 屏幕上的进度与状态显示。
+
+---
+
+## 6. 总结 (Conclusion)
+
+reMarkable 微信读书应用为我们提供了官方墨水屏客户端在 API 调用、请求头伪装以及在线字体 CDN 分发方面的宝贵经验。虽然由于操作系统与硬件架构的差异无法直接运行其 Linux 二进制，但 CrossMux 能够以**协议升级 + C++ 原生重构**的方式，将 reMarkable 版的优秀特性（尤其是官方 User-Agent 和在线 CDN 字体）完美融合到 ESP32 固件中。
